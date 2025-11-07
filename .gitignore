@@ -1,0 +1,32 @@
+# Visual Studio files
+.vs/
+*.suo
+*.user
+*.log
+*.bak
+*.resharper
+
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+*.pdb
+*.exe
+*.dll
+*.cache
+*.zip
+*.nupkg
+*.trx
+
+# NuGet packages
+packages/
+
+# Project files
+*.csproj.user
+*.csproj.DotSettings
+
+# Solution files
+*.sln.DotSettings
+
+# Temporary files
+Temp/
+tmp/
