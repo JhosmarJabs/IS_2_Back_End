@@ -8,14 +8,18 @@ public interface IUserRepository
     Task<User?> GetByEmailAsync(string email);
     Task<User?> GetByEmailWithRolesAsync(string email);
     Task<bool> EmailExistsAsync(string email);
+    Task<bool> ExistsByPhoneAsync(string Phone);
     Task<User> CreateAsync(User user);
     Task UpdateAsync(User user);
     Task DeleteAsync(int id);
 
     Task<VerificationToken?> GetVerificationTokenAsync(string email, string token);
+    Task<VerificationToken?> GetVerificationTokenByPurposeAsync(string email, string token, string purpose);
+    Task<VerificationToken?> GetVerificationTokenByTokenAsync(string token, string purpose);
     Task CreateVerificationTokenAsync(VerificationToken verificationToken);
     Task UpdateVerificationTokenAsync(VerificationToken verificationToken);
     Task InvalidateOldVerificationTokensAsync(int userId);
+    Task InvalidateOldTokensByPurposeAsync(int userId, string purpose);
 
     Task<RefreshToken?> GetRefreshTokenAsync(string tokenHash);
     Task CreateRefreshTokenAsync(RefreshToken refreshToken);

@@ -1,6 +1,5 @@
 ﻿using IS_2_Back_End.Data;
 using IS_2_Back_End.Entities;
-using IS_2_Back_End.Repositories;
 using Microsoft.EntityFrameworkCore;
 
 namespace IS_2_Back_End.Repositories;
@@ -13,6 +12,11 @@ public class UserRepository : IUserRepository
     {
         _context = context;
     }
+    public async Task<bool> ExistsByPhoneAsync(string phone)
+    {
+        return await _context.Users.AnyAsync(u => u.Phone == phone);
+    }
+
 
     public async Task<User?> GetByIdAsync(int id)
     {
@@ -22,17 +26,17 @@ public class UserRepository : IUserRepository
             .FirstOrDefaultAsync(u => u.Id == id);
     }
 
-    public async Task<User?> GetByEmailAsync(string email)
-    {
-        return await _context.Users
-            .FirstOrDefaultAsync(u => u.Email == email);
-    }
-
     public async Task<User?> GetByEmailWithRolesAsync(string email)
     {
         return await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Email == email);
+    }
+
+    public async Task<User?> GetByEmailAsync(string email)
+    {
+        return await _context.Users
             .FirstOrDefaultAsync(u => u.Email == email);
     }
 
@@ -77,6 +81,29 @@ public class UserRepository : IUserRepository
                 vt.ExpiresAt > DateTime.UtcNow);
     }
 
+    public async Task<VerificationToken?> GetVerificationTokenByPurposeAsync(string email, string token, string purpose)
+    {
+        return await _context.VerificationTokens
+            .Include(vt => vt.User)
+            .FirstOrDefaultAsync(vt =>
+                vt.User.Email == email &&
+                vt.Token == token &&
+                vt.Purpose == purpose &&
+                !vt.Consumed &&
+                vt.ExpiresAt > DateTime.UtcNow);
+    }
+
+    public async Task<VerificationToken?> GetVerificationTokenByTokenAsync(string token, string purpose)
+    {
+        return await _context.VerificationTokens
+            .Include(vt => vt.User)
+            .FirstOrDefaultAsync(vt =>
+                vt.Token == token &&
+                vt.Purpose == purpose &&
+                !vt.Consumed &&
+                vt.ExpiresAt > DateTime.UtcNow);
+    }
+
     public async Task CreateVerificationTokenAsync(VerificationToken verificationToken)
     {
         _context.VerificationTokens.Add(verificationToken);
@@ -93,6 +120,21 @@ public class UserRepository : IUserRepository
     {
         var oldTokens = await _context.VerificationTokens
             .Where(vt => vt.UserId == userId && !vt.Consumed)
+            .ToListAsync();
+
+        foreach (var token in oldTokens)
+        {
+            token.Consumed = true;
+            token.ConsumedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync();
+    }
+
+    public async Task InvalidateOldTokensByPurposeAsync(int userId, string purpose)
+    {
+        var oldTokens = await _context.VerificationTokens
+            .Where(vt => vt.UserId == userId && vt.Purpose == purpose && !vt.Consumed)
             .ToListAsync();
 
         foreach (var token in oldTokens)

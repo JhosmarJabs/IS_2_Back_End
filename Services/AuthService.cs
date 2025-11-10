@@ -1,10 +1,12 @@
-﻿using System.Security.Cryptography;
-using IS_2_Back_End.DTOs;
+﻿using IS_2_Back_End.DTOs;
 using IS_2_Back_End.DTOs.Auth;
 using IS_2_Back_End.Entities;
 using IS_2_Back_End.Helpers;
 using IS_2_Back_End.Repositories;
-
+using IS_2_Back_End.Utils;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Google.Apis.Auth;
 
 namespace IS_2_Back_End.Services;
 
@@ -14,21 +16,33 @@ public class AuthService : IAuthService
     private readonly Sha256Hasher _hasher;
     private readonly TokenService _tokenService;
     private readonly N8nClient _n8nClient;
+    private readonly IConfiguration _configuration;
+
 
     public AuthService(
         IUserRepository userRepository,
         Sha256Hasher hasher,
         TokenService tokenService,
-        N8nClient n8nClient)
+        N8nClient n8nClient,
+        IConfiguration configuration)
     {
         _userRepository = userRepository;
         _hasher = hasher;
         _tokenService = tokenService;
         _n8nClient = n8nClient;
+        _configuration = configuration;
     }
+
+    #region Registro y Verificación Básicos
 
     public async Task<UserResponse> RegisterAsync(RegisterRequest request)
     {
+        if (!string.IsNullOrWhiteSpace(request.Phone))
+        {
+            // Validar que el teléfono no esté registrado
+            if (await _userRepository.ExistsByPhoneAsync(request.Phone))
+                throw new InvalidOperationException("El teléfono ya está registrado.");
+        }
         if (await _userRepository.EmailExistsAsync(request.Email))
         {
             throw new InvalidOperationException("El email ya está registrado");
@@ -50,23 +64,25 @@ public class AuthService : IAuthService
 
         user = await _userRepository.CreateAsync(user);
 
-        // Asignar rol de usuario por defecto
         user.UserRoles.Add(new UserRole
         {
             UserId = user.Id,
-            RoleId = 1 // user role
+            RoleId = 1, // user role
+            Role = new Role // Asignar explícitamente el objeto Role
+            {
+                Id = 1,
+                Name = "user" // Asegúrate de que el nombre coincide con el rol en tu base de datos
+            }
         });
-
         await _userRepository.UpdateAsync(user);
 
-        // Generar código OTP
         var otpCode = GenerateOtpCode();
         var verificationToken = new VerificationToken
         {
             UserId = user.Id,
             Token = otpCode,
-            Purpose = "email_verification",
-            Payload = $"{{\"email\":\"{user.Email}\"}}",
+            Purpose = Constants.EmailVerification,
+            Payload = JsonSerializer.Serialize(new { email = user.Email }),
             ExpiresAt = DateTime.UtcNow.AddMinutes(15),
             CreatedAt = DateTime.UtcNow
         };
@@ -77,7 +93,136 @@ public class AuthService : IAuthService
         return MapToUserResponse(user);
     }
 
+    public async Task<bool> VerifyEmailAsync(VerifyTokenRequest request)
+    {
+        var verificationToken = await _userRepository.GetVerificationTokenAsync(request.Email, request.Token);
+
+        if (verificationToken == null)
+        {
+            throw new InvalidOperationException("Token de verificación inválido o expirado");
+        }
+
+        var user = verificationToken.User;
+        user.IsVerified = true;
+        await _userRepository.UpdateAsync(user);
+
+        verificationToken.Consumed = true;
+        verificationToken.ConsumedAt = DateTime.UtcNow;
+        await _userRepository.UpdateVerificationTokenAsync(verificationToken);
+
+        return true;
+    }
+
+    public async Task<bool> ResendVerificationCodeAsync(string email)
+    {
+        var user = await _userRepository.GetByEmailAsync(email);
+
+        if (user == null)
+        {
+            throw new InvalidOperationException("Usuario no encontrado");
+        }
+
+        if (user.IsVerified)
+        {
+            throw new InvalidOperationException("El email ya está verificado");
+        }
+
+        await _userRepository.InvalidateOldVerificationTokensAsync(user.Id);
+
+        var otpCode = GenerateOtpCode();
+        var verificationToken = new VerificationToken
+        {
+            UserId = user.Id,
+            Token = otpCode,
+            Purpose = Constants.EmailVerification,
+            Payload = JsonSerializer.Serialize(new { email = user.Email }),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(15),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _userRepository.CreateVerificationTokenAsync(verificationToken);
+        await _n8nClient.SendVerificationEmailAsync(user.Email, otpCode);
+
+        return true;
+    }
+
+    #endregion
+
+    #region Login Tradicional
+
     public async Task<TokenResponse> LoginAsync(LoginRequest request)
+    {
+        return await LoginWithPasswordAsync(new LoginPasswordRequest
+        {
+            Email = request.Email,
+            Password = request.Password
+        });
+    }
+
+    #endregion
+
+    #region Prevalidación
+
+    public async Task<PrevalidateResponse> PrevalidateEmailAsync(string email)
+    {
+        var user = await _userRepository.GetByEmailAsync(email);
+
+        if (user == null)
+        {
+            return new PrevalidateResponse
+            {
+                EmailExists = false,
+                IsVerified = false,
+                CanLogin = false,
+                AvailableLoginMethods = new List<string>()
+            };
+        }
+
+        var methods = new List<string> { "password" };
+
+        if (user.IsVerified)
+        {
+            methods.AddRange(new[] { "otp", "magic_link" });
+        }
+
+        return new PrevalidateResponse
+        {
+            EmailExists = true,
+            IsVerified = user.IsVerified,
+            CanLogin = user.IsVerified,
+            AvailableLoginMethods = methods
+        };
+    }
+
+    #endregion
+
+    #region Verificación Genérica de Tokens
+
+    public async Task<bool> VerifyGenericTokenAsync(VerifyGenericTokenRequest request)
+    {
+        var token = await _userRepository.GetVerificationTokenByPurposeAsync(
+            request.Email,
+            request.Token,
+            request.Purpose
+        );
+
+        if (token == null)
+        {
+            throw new InvalidOperationException("Token inválido o expirado");
+        }
+
+        token.Consumed = true;
+        token.ConsumedAt = DateTime.UtcNow;
+        await _userRepository.UpdateVerificationTokenAsync(token);
+
+        return true;
+    }
+
+    #endregion
+
+    #region Login con Password
+
+    public async Task<TokenResponse> LoginWithPasswordAsync(LoginPasswordRequest request)
     {
         var user = await _userRepository.GetByEmailWithRolesAsync(request.Email);
 
@@ -91,6 +236,324 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Debes verificar tu email antes de iniciar sesión");
         }
 
+        return await GenerateAuthTokensAsync(user);
+    }
+
+    #endregion
+
+    #region Login con OTP
+
+    public async Task<bool> RequestLoginOtpAsync(LoginPasswordRequestOtpRequest request)
+    {
+        var user = await _userRepository.GetByEmailAsync(request.Email);
+
+        if (user == null || !_hasher.VerifyPassword(request.Password, user.Salt, user.PasswordHash))
+        {
+            throw new UnauthorizedAccessException("Credenciales inválidas");
+        }
+
+        if (!user.IsVerified)
+        {
+            throw new UnauthorizedAccessException("Debes verificar tu email primero");
+        }
+
+        await _userRepository.InvalidateOldTokensByPurposeAsync(user.Id, Constants.OtpPurpose);
+
+        var otpCode = GenerateOtpCode();
+        var otpToken = new VerificationToken
+        {
+            UserId = user.Id,
+            Token = otpCode,
+            Purpose = Constants.OtpPurpose,
+            Payload = JsonSerializer.Serialize(new { email = user.Email, type = "login" }),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(10),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _userRepository.CreateVerificationTokenAsync(otpToken);
+        await _n8nClient.SendOtpEmailAsync(user.Email, otpCode);
+
+        return true;
+    }
+
+    public async Task<TokenResponse> LoginWithOtpAsync(LoginOtpRequest request)
+    {
+        var token = await _userRepository.GetVerificationTokenByPurposeAsync(
+            request.Email,
+            request.OtpCode,
+            Constants.OtpPurpose
+        );
+
+        if (token == null)
+        {
+            throw new UnauthorizedAccessException("Código OTP inválido o expirado");
+        }
+
+        var user = await _userRepository.GetByEmailWithRolesAsync(request.Email);
+        if (user == null)
+        {
+            throw new UnauthorizedAccessException("Usuario no encontrado");
+        }
+
+        token.Consumed = true;
+        token.ConsumedAt = DateTime.UtcNow;
+        await _userRepository.UpdateVerificationTokenAsync(token);
+
+        return await GenerateAuthTokensAsync(user);
+    }
+
+    #endregion
+
+    #region Magic Link
+
+    public async Task<bool> RequestMagicLinkAsync(string email)
+    {
+        var user = await _userRepository.GetByEmailAsync(email);
+
+        if (user == null)
+        {
+            throw new InvalidOperationException("Usuario no encontrado");
+        }
+
+        if (!user.IsVerified)
+        {
+            throw new InvalidOperationException("Debes verificar tu email primero");
+        }
+
+        await _userRepository.InvalidateOldTokensByPurposeAsync(user.Id, Constants.MagicLink);
+
+        var magicToken = GenerateSecureToken();
+        var verificationToken = new VerificationToken
+        {
+            UserId = user.Id,
+            Token = magicToken,
+            Purpose = Constants.MagicLink,
+            Payload = JsonSerializer.Serialize(new { email = user.Email }),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(15),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _userRepository.CreateVerificationTokenAsync(verificationToken);
+        await _n8nClient.SendMagicLinkEmailAsync(user.Email, magicToken);
+
+        return true;
+    }
+
+    public async Task<TokenResponse> LoginWithMagicLinkAsync(string token)
+    {
+        var verificationToken = await _userRepository.GetVerificationTokenByTokenAsync(token, Constants.MagicLink);
+
+        if (verificationToken == null)
+        {
+            throw new UnauthorizedAccessException("Magic link inválido o expirado");
+        }
+
+        var user = await _userRepository.GetByEmailWithRolesAsync(verificationToken.User.Email);
+        if (user == null)
+        {
+            throw new UnauthorizedAccessException("Usuario no encontrado");
+        }
+
+        verificationToken.Consumed = true;
+        verificationToken.ConsumedAt = DateTime.UtcNow;
+        await _userRepository.UpdateVerificationTokenAsync(verificationToken);
+
+        return await GenerateAuthTokensAsync(user);
+    }
+
+    #endregion
+
+    #region OAuth Google
+
+    public async Task<GoogleOAuthResponse> AuthenticateWithGoogleAsync(string idToken)
+    {
+        try
+        {
+            // Validar el token con Google
+            var settings = new GoogleJsonWebSignature.ValidationSettings
+            {
+                Audience = new[] { _configuration["GoogleOAuth:ClientId"] }
+            };
+
+            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+
+            if (payload == null)
+            {
+                throw new UnauthorizedAccessException("Token de Google inválido");
+            }
+
+            var email = payload.Email;
+            var nombre = payload.GivenName ?? "";
+            var apellido = payload.FamilyName ?? "";
+            var isEmailVerified = payload.EmailVerified;
+
+            if (!isEmailVerified)
+            {
+                throw new UnauthorizedAccessException("El email de Google no está verificado");
+            }
+
+            var user = await _userRepository.GetByEmailWithRolesAsync(email);
+            var isNewUser = false;
+
+            if (user == null)
+            {
+                // Crear nuevo usuario
+                var salt = _hasher.GenerateSalt();
+                user = new User
+                {
+                    Email = email,
+                    Salt = salt,
+                    PasswordHash = _hasher.HashPassword(Guid.NewGuid().ToString(), salt),
+                    IsVerified = true, // OAuth users are verified
+                    Nombre = nombre,
+                    Apellido = apellido,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                user = await _userRepository.CreateAsync(user);
+
+                user.UserRoles.Add(new UserRole
+                {
+                    UserId = user.Id,
+                    RoleId = 1 // user role
+                });
+
+                await _userRepository.UpdateAsync(user);
+                isNewUser = true;
+            }
+
+            var tokens = await GenerateAuthTokensAsync(user);
+
+            return new GoogleOAuthResponse
+            {
+                AccessToken = tokens.AccessToken,
+                RefreshToken = tokens.RefreshToken,
+                ExpiresAt = tokens.ExpiresAt,
+                TokenType = tokens.TokenType,
+                IsNewUser = isNewUser,
+                User = new UserInfo
+                {
+                    Id = user.Id,
+                    Email = user.Email,
+                    Nombre = user.Nombre,
+                    Apellido = user.Apellido
+                }
+            };
+        }
+        catch (InvalidJwtException)
+        {
+            throw new UnauthorizedAccessException("Token de Google inválido o expirado");
+        }
+    }
+
+    #endregion
+
+    #region Password Reset
+
+    public async Task<bool> RequestPasswordResetAsync(string email)
+    {
+        var user = await _userRepository.GetByEmailAsync(email);
+
+        if (user == null)
+        {
+            // Por seguridad, no revelamos si el email existe
+            return true;
+        }
+
+        await _userRepository.InvalidateOldTokensByPurposeAsync(user.Id, "password_reset");
+
+        var resetToken = GenerateSecureToken();
+        var verificationToken = new VerificationToken
+        {
+            UserId = user.Id,
+            Token = resetToken,
+            Purpose = "password_reset",
+            Payload = JsonSerializer.Serialize(new { email = user.Email }),
+            ExpiresAt = DateTime.UtcNow.AddHours(1),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _userRepository.CreateVerificationTokenAsync(verificationToken);
+        await _n8nClient.SendPasswordResetEmailAsync(user.Email, resetToken);
+
+        return true;
+    }
+
+    public async Task<bool> ResetPasswordAsync(ResetPasswordRequest request)
+    {
+        var token = await _userRepository.GetVerificationTokenByPurposeAsync(
+            request.Email,
+            request.Token,
+            "password_reset"
+        );
+
+        if (token == null)
+        {
+            throw new InvalidOperationException("Token de reset inválido o expirado");
+        }
+
+        var user = token.User;
+        var newSalt = _hasher.GenerateSalt();
+        user.Salt = newSalt;
+        user.PasswordHash = _hasher.HashPassword(request.NewPassword, newSalt);
+        await _userRepository.UpdateAsync(user);
+
+        token.Consumed = true;
+        token.ConsumedAt = DateTime.UtcNow;
+        await _userRepository.UpdateVerificationTokenAsync(token);
+
+        // Revocar todos los refresh tokens del usuario por seguridad
+        await _userRepository.RevokeAllUserRefreshTokensAsync(user.Id);
+
+        return true;
+    }
+
+    #endregion
+
+    #region Refresh y Revoke Tokens
+
+    public async Task<TokenResponse> RefreshTokenAsync(string refreshToken)
+    {
+        var tokenHash = HashToken(refreshToken);
+        var tokenEntity = await _userRepository.GetRefreshTokenAsync(tokenHash);
+
+        if (tokenEntity == null)
+        {
+            throw new UnauthorizedAccessException("Token de refresco inválido");
+        }
+
+        var user = await _userRepository.GetByEmailWithRolesAsync(tokenEntity.User.Email);
+        if (user == null)
+        {
+            throw new UnauthorizedAccessException("Usuario no encontrado");
+        }
+
+        tokenEntity.Revoked = true;
+        tokenEntity.RevokedAt = DateTime.UtcNow;
+        await _userRepository.UpdateRefreshTokenAsync(tokenEntity);
+
+        return await GenerateAuthTokensAsync(user);
+    }
+
+    public async Task RevokeTokenAsync(string refreshToken)
+    {
+        var tokenHash = HashToken(refreshToken);
+        var tokenEntity = await _userRepository.GetRefreshTokenAsync(tokenHash);
+
+        if (tokenEntity != null)
+        {
+            tokenEntity.Revoked = true;
+            tokenEntity.RevokedAt = DateTime.UtcNow;
+            await _userRepository.UpdateRefreshTokenAsync(tokenEntity);
+        }
+    }
+
+    #endregion
+
+    #region Helper Methods
+
+    private async Task<TokenResponse> GenerateAuthTokensAsync(User user)
+    {
         user.UpdatedAt = DateTime.UtcNow;
         await _userRepository.UpdateAsync(user);
 
@@ -116,118 +579,18 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<bool> VerifyEmailAsync(VerifyTokenRequest request)
-    {
-        var verificationToken = await _userRepository.GetVerificationTokenAsync(request.Email, request.Token);
-
-        if (verificationToken == null)
-        {
-            throw new InvalidOperationException("Token de verificación inválido o expirado");
-        }
-
-        var user = verificationToken.User;
-        user.IsVerified = true;
-        await _userRepository.UpdateAsync(user);
-
-        verificationToken.Consumed = true;
-        verificationToken.ConsumedAt = DateTime.UtcNow;
-        await _userRepository.UpdateVerificationTokenAsync(verificationToken);
-
-        return true;
-    }
-
-    public async Task<TokenResponse> RefreshTokenAsync(string refreshToken)
-    {
-        var tokenHash = HashToken(refreshToken);
-        var tokenEntity = await _userRepository.GetRefreshTokenAsync(tokenHash);
-
-        if (tokenEntity == null)
-        {
-            throw new UnauthorizedAccessException("Token de refresco inválido");
-        }
-
-        var user = await _userRepository.GetByEmailWithRolesAsync(tokenEntity.User.Email);
-        if (user == null)
-        {
-            throw new UnauthorizedAccessException("Usuario no encontrado");
-        }
-
-        var newAccessToken = _tokenService.GenerateAccessToken(user);
-        var newRefreshToken = _tokenService.GenerateRefreshToken();
-        var newRefreshTokenHash = HashToken(newRefreshToken);
-
-        tokenEntity.Revoked = true;
-        tokenEntity.RevokedAt = DateTime.UtcNow;
-        await _userRepository.UpdateRefreshTokenAsync(tokenEntity);
-
-        var newRefreshTokenEntity = new RefreshToken
-        {
-            UserId = user.Id,
-            TokenHash = newRefreshTokenHash,
-            CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddDays(30)
-        };
-
-        await _userRepository.CreateRefreshTokenAsync(newRefreshTokenEntity);
-
-        return new TokenResponse
-        {
-            AccessToken = newAccessToken,
-            RefreshToken = newRefreshToken,
-            ExpiresAt = DateTime.UtcNow.AddMinutes(60)
-        };
-    }
-
-    public async Task<bool> ResendVerificationCodeAsync(string email)
-    {
-        var user = await _userRepository.GetByEmailAsync(email);
-
-        if (user == null)
-        {
-            throw new InvalidOperationException("Usuario no encontrado");
-        }
-
-        if (user.IsVerified)
-        {
-            throw new InvalidOperationException("El email ya está verificado");
-        }
-
-        await _userRepository.InvalidateOldVerificationTokensAsync(user.Id);
-
-        var otpCode = GenerateOtpCode();
-        var verificationToken = new VerificationToken
-        {
-            UserId = user.Id,
-            Token = otpCode,
-            Purpose = "email_verification",
-            Payload = $"{{\"email\":\"{user.Email}\"}}",
-            ExpiresAt = DateTime.UtcNow.AddMinutes(15),
-            CreatedAt = DateTime.UtcNow
-        };
-
-        await _userRepository.CreateVerificationTokenAsync(verificationToken);
-        await _n8nClient.SendVerificationEmailAsync(user.Email, otpCode);
-
-        return true;
-    }
-
-    public async Task RevokeTokenAsync(string refreshToken)
-    {
-        var tokenHash = HashToken(refreshToken);
-        var tokenEntity = await _userRepository.GetRefreshTokenAsync(tokenHash);
-
-        if (tokenEntity != null)
-        {
-            tokenEntity.Revoked = true;
-            tokenEntity.RevokedAt = DateTime.UtcNow;
-            await _userRepository.UpdateRefreshTokenAsync(tokenEntity);
-        }
-    }
-
     private string GenerateOtpCode()
     {
         var random = new Random();
         return random.Next(100000, 999999).ToString();
+    }
+
+    private string GenerateSecureToken()
+    {
+        var bytes = new byte[32];
+        using var rng = RandomNumberGenerator.Create();
+        rng.GetBytes(bytes);
+        return Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").Replace("=", "");
     }
 
     private string HashToken(string token)
@@ -244,12 +607,15 @@ public class AuthService : IAuthService
             Id = user.Id,
             Email = user.Email,
             Phone = user.Phone,
-            Nombre = user.Nombre, // Usamos phone ya que no hay firstName
+            Nombre = user.Nombre,
             Apellido = user.Apellido,
             Sexo = user.Sexo,
             IsEmailVerified = user.IsVerified,
             CreatedAt = user.CreatedAt,
             Roles = user.UserRoles.Select(ur => ur.Role.Name).ToList()
         };
+
     }
+
+    #endregion
 }
