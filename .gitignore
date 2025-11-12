@@ -30,3 +30,5 @@ packages/
 # Temporary files
 Temp/
 tmp/
+
+.env

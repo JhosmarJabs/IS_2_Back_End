@@ -1,3 +1,4 @@
+using DotNetEnv;
 using IS_2_Back_End.Data;
 using IS_2_Back_End.Helpers;
 using IS_2_Back_End.Repositories;
@@ -11,26 +12,33 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configuración de JwtSettings
+// 1. Carga el archivo .env antes de cualquier configuración
+Env.Load();
+
+// 2. Incluye las variables del entorno en el configuration builder
+builder.Configuration.AddEnvironmentVariables();
+
+// 3. Lee la configuración JWT (¡ahora debe encontrar la clave en el entorno!)
 var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtSettings>();
-if (jwtSettings == null)
-    throw new InvalidOperationException("No se encontró la configuración JwtSettings en appsettings.json.");
+if (jwtSettings == null || string.IsNullOrWhiteSpace(jwtSettings.Secret))
+{
+    throw new InvalidOperationException("No se encontró la configuración JwtSettings o la clave secreta JWT está vacía.");
+}
+
 builder.Services.AddSingleton(jwtSettings);
 
-// DbContext con PostgreSQL
+// 4. Configuración de la base de datos
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Repositorios
+// 5. Repositorios y servicios
 builder.Services.AddScoped<IUserRepository, UserRepository>();
-
-// Servicios
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<Sha256Hasher>();
 builder.Services.AddHttpClient<N8nClient>();
 
-// Autenticación JWT
+// 6. Configura la autenticación JWT
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -55,7 +63,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// Configuración de Swagger con JWT en un solo bloque
+// 7. Configuración de Swagger con autenticación JWT
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo
@@ -72,9 +80,7 @@ builder.Services.AddSwaggerGen(options =>
 
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header usando el esquema Bearer.\r\n\r\n"
-                    + "Ingresa 'Bearer' [espacio] y luego tu token en el campo de abajo.\r\n\r\n"
-                    + "Ejemplo: \"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\"",
+        Description = "JWT Authorization header usando Bearer",
         Name = "Authorization",
         In = ParameterLocation.Header,
         Type = SecuritySchemeType.ApiKey,
@@ -86,18 +92,14 @@ builder.Services.AddSwaggerGen(options =>
         {
             new OpenApiSecurityScheme
             {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
             },
             Array.Empty<string>()
         }
     });
 });
 
-// CORS
+// 8. Configuración CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -124,3 +126,4 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+Console.WriteLine($"Clave JWT encontrada: {jwtSettings.Secret}");
