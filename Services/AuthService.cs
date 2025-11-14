@@ -1,4 +1,4 @@
-﻿using IS_2_Back_End.DTOs;
+using IS_2_Back_End.DTOs;
 using IS_2_Back_End.DTOs.Auth;
 using IS_2_Back_End.Entities;
 using IS_2_Back_End.Helpers;
@@ -6,7 +6,6 @@ using IS_2_Back_End.Repositories;
 using IS_2_Back_End.Utils;
 using System.Security.Cryptography;
 using System.Text.Json;
-using Google.Apis.Auth;
 
 namespace IS_2_Back_End.Services;
 
@@ -16,33 +15,23 @@ public class AuthService : IAuthService
     private readonly Sha256Hasher _hasher;
     private readonly TokenService _tokenService;
     private readonly N8nClient _n8nClient;
-    private readonly IConfiguration _configuration;
-
 
     public AuthService(
         IUserRepository userRepository,
         Sha256Hasher hasher,
         TokenService tokenService,
-        N8nClient n8nClient,
-        IConfiguration configuration)
+        N8nClient n8nClient)
     {
         _userRepository = userRepository;
         _hasher = hasher;
         _tokenService = tokenService;
         _n8nClient = n8nClient;
-        _configuration = configuration;
     }
 
     #region Registro y Verificación Básicos
 
     public async Task<UserResponse> RegisterAsync(RegisterRequest request)
     {
-        if (!string.IsNullOrWhiteSpace(request.Phone))
-        {
-            // Validar que el teléfono no esté registrado
-            if (await _userRepository.ExistsByPhoneAsync(request.Phone))
-                throw new InvalidOperationException("El teléfono ya está registrado.");
-        }
         if (await _userRepository.EmailExistsAsync(request.Email))
         {
             throw new InvalidOperationException("El email ya está registrado");
@@ -67,13 +56,9 @@ public class AuthService : IAuthService
         user.UserRoles.Add(new UserRole
         {
             UserId = user.Id,
-            RoleId = 1, // user role
-            Role = new Role // Asignar explícitamente el objeto Role
-            {
-                Id = 1,
-                Name = "user" // Asegúrate de que el nombre coincide con el rol en tu base de datos
-            }
+            RoleId = 1 // user role
         });
+
         await _userRepository.UpdateAsync(user);
 
         var otpCode = GenerateOtpCode();
@@ -367,83 +352,63 @@ public class AuthService : IAuthService
 
     public async Task<GoogleOAuthResponse> AuthenticateWithGoogleAsync(string idToken)
     {
-        try
+        // Aquí deberías validar el idToken con Google
+        // Por ahora simularemos la respuesta
+
+        // TODO: Implementar validación real con Google.Apis.Auth
+        // var payload = await GoogleJsonWebSignature.ValidateAsync(idToken);
+
+        // Simulación (reemplazar con lógica real)
+        var email = "user@gmail.com"; // Extraer del token de Google
+        var nombre = "Usuario";
+        var apellido = "Google";
+
+        var user = await _userRepository.GetByEmailWithRolesAsync(email);
+        var isNewUser = false;
+
+        if (user == null)
         {
-            // Validar el token con Google
-            var settings = new GoogleJsonWebSignature.ValidationSettings
+            var salt = _hasher.GenerateSalt();
+            user = new User
             {
-                Audience = new[] { _configuration["GoogleOAuth:ClientId"] }
+                Email = email,
+                Salt = salt,
+                PasswordHash = _hasher.HashPassword(Guid.NewGuid().ToString(), salt), // Password random
+                IsVerified = true, // OAuth users are auto-verified
+                Nombre = nombre,
+                Apellido = apellido,
+                CreatedAt = DateTime.UtcNow
             };
 
-            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+            user = await _userRepository.CreateAsync(user);
 
-            if (payload == null)
+            user.UserRoles.Add(new UserRole
             {
-                throw new UnauthorizedAccessException("Token de Google inválido");
-            }
+                UserId = user.Id,
+                RoleId = 1
+            });
 
-            var email = payload.Email;
-            var nombre = payload.GivenName ?? "";
-            var apellido = payload.FamilyName ?? "";
-            var isEmailVerified = payload.EmailVerified;
-
-            if (!isEmailVerified)
-            {
-                throw new UnauthorizedAccessException("El email de Google no está verificado");
-            }
-
-            var user = await _userRepository.GetByEmailWithRolesAsync(email);
-            var isNewUser = false;
-
-            if (user == null)
-            {
-                // Crear nuevo usuario
-                var salt = _hasher.GenerateSalt();
-                user = new User
-                {
-                    Email = email,
-                    Salt = salt,
-                    PasswordHash = _hasher.HashPassword(Guid.NewGuid().ToString(), salt),
-                    IsVerified = true, // OAuth users are verified
-                    Nombre = nombre,
-                    Apellido = apellido,
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                user = await _userRepository.CreateAsync(user);
-
-                user.UserRoles.Add(new UserRole
-                {
-                    UserId = user.Id,
-                    RoleId = 1 // user role
-                });
-
-                await _userRepository.UpdateAsync(user);
-                isNewUser = true;
-            }
-
-            var tokens = await GenerateAuthTokensAsync(user);
-
-            return new GoogleOAuthResponse
-            {
-                AccessToken = tokens.AccessToken,
-                RefreshToken = tokens.RefreshToken,
-                ExpiresAt = tokens.ExpiresAt,
-                TokenType = tokens.TokenType,
-                IsNewUser = isNewUser,
-                User = new UserInfo
-                {
-                    Id = user.Id,
-                    Email = user.Email,
-                    Nombre = user.Nombre,
-                    Apellido = user.Apellido
-                }
-            };
+            await _userRepository.UpdateAsync(user);
+            isNewUser = true;
         }
-        catch (InvalidJwtException)
+
+        var tokens = await GenerateAuthTokensAsync(user);
+
+        return new GoogleOAuthResponse
         {
-            throw new UnauthorizedAccessException("Token de Google inválido o expirado");
-        }
+            AccessToken = tokens.AccessToken,
+            RefreshToken = tokens.RefreshToken,
+            ExpiresAt = tokens.ExpiresAt,
+            TokenType = tokens.TokenType,
+            IsNewUser = isNewUser,
+            User = new UserInfo
+            {
+                Id = user.Id,
+                Email = user.Email,
+                Nombre = user.Nombre,
+                Apellido = user.Apellido
+            }
+        };
     }
 
     #endregion
@@ -493,6 +458,16 @@ public class AuthService : IAuthService
         }
 
         var user = token.User;
+
+        // NUEVA VALIDACIÓN: Verificar si la nueva contraseña es igual a la actual
+        var isSamePassword = _hasher.VerifyPassword(request.NewPassword, user.Salt, user.PasswordHash);
+
+        if (isSamePassword)
+        {
+            throw new InvalidOperationException("La nueva contraseña no puede ser igual a la contraseña actual. Por favor, elige una contraseña diferente.");
+        }
+
+        // Si es diferente, proceder con el cambio
         var newSalt = _hasher.GenerateSalt();
         user.Salt = newSalt;
         user.PasswordHash = _hasher.HashPassword(request.NewPassword, newSalt);
@@ -614,7 +589,6 @@ public class AuthService : IAuthService
             CreatedAt = user.CreatedAt,
             Roles = user.UserRoles.Select(ur => ur.Role.Name).ToList()
         };
-
     }
 
     #endregion
