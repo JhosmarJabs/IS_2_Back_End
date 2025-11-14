@@ -38,7 +38,7 @@ public class N8nClient
 
     public async Task SendMagicLinkEmailAsync(string email, string magicToken)
     {
-        var magicLink = $"https://is-2-front-end.vercel.app/auth/magic?token={magicToken}";
+        var magicLink = $"https://is-2-front-end.vercel.app/#/auth/magic?token={magicToken}";
 
         await SendEmailAsync(email, "magic_link", new
         {
@@ -50,7 +50,7 @@ public class N8nClient
 
     public async Task SendPasswordResetEmailAsync(string email, string resetToken)
     {
-        var resetLink = $"https://is-2-front-end.vercel.app/auth/reset?token={resetToken}";
+        var resetLink = $"https://is-2-front-end.vercel.app/#/auth/reset?token={resetToken}";
 
         await SendEmailAsync(email, "password_reset", new
         {
