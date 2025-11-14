@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using System.Text.Unicode;
@@ -415,7 +415,6 @@ public class N8nClient
     public async Task SendPasswordResetEmailAsync(string email, string resetToken)
     {
         var resetLink = $"{_url}/reset?token={resetToken}";
-
         var data = new
         {
             resetLink,
