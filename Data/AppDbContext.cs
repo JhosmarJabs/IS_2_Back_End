@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿ using Microsoft.EntityFrameworkCore;
 using IS_2_Back_End.Entities;
 
 namespace IS_2_Back_End.Data;

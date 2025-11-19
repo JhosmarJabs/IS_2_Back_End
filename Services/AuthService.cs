@@ -32,6 +32,27 @@ public class AuthService : IAuthService
 
     public async Task<UserResponse> RegisterAsync(RegisterRequest request)
     {
+        var (isValid, errors) = InputSanitizer.Validation.ValidateRegistration(
+        request.Email, request.Phone, request.Nombre, request.Apellido, request.Sexo);
+
+        if (!isValid)
+        {
+            throw new InvalidOperationException($"Datos inválidos: {string.Join(", ", errors)}");
+        }
+
+        // VALIDACIÓN 2: Validar complejidad de contraseña
+        var passwordValidation = PasswordValidator.Validate(request.Password);
+        if (!passwordValidation.IsValid)
+        {
+            throw new InvalidOperationException(
+                $"Contraseña inválida:\n{string.Join("\n", passwordValidation.Errors)}");
+        }
+
+        // Sanitizar datos
+        request.Email = InputSanitizer.SanitizeEmail(request.Email);
+        request.Phone = InputSanitizer.SanitizePhone(request.Phone);
+        request.Nombre = InputSanitizer.SanitizeName(request.Nombre);
+        request.Apellido = InputSanitizer.SanitizeName(request.Apellido);
         if (await _userRepository.EmailExistsAsync(request.Email))
         {
             throw new InvalidOperationException("El email ya está registrado");
@@ -587,9 +608,8 @@ public class AuthService : IAuthService
             Sexo = user.Sexo,
             IsEmailVerified = user.IsVerified,
             CreatedAt = user.CreatedAt,
-            Roles = user.UserRoles.Select(ur => ur.Role.Name).ToList()
+            Roles = user.UserRoles?.Select(ur => ur.Role?.Name ?? "user").ToList() ?? new List<string>()
         };
     }
-
     #endregion
 }
