@@ -1,6 +1,74 @@
-@IS_2_Back_End_HostAddress = http://localhost:5243
+### Variables
+@host = http://localhost:5243
+@contentType = application/json
 
-GET {{IS_2_Back_End_HostAddress}}/weatherforecast/
-Accept: application/json
+### 1. Health Check
+GET {{host}}/api/auth/health
+Accept: {{contentType}}
+
+###
+
+### 2. Registro de Usuario (REQ-002: Validación de entrada)
+POST {{host}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "email": "test@example.com",
+  "password": "SecureP@ss123",
+  "nombre": "Test",
+  "apellido": "User"
+}
+
+###
+
+### 3. Registro con Email Malicioso (debe fallar - REQ-002)
+POST {{host}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "email": "test@example.com' OR '1'='1",
+  "password": "SecureP@ss123",
+  "nombre": "Test",
+  "apellido": "User"
+}
+
+###
+
+### 4. Registro con Contraseña Débil (debe fallar - REQ-003)
+POST {{host}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "email": "test2@example.com",
+  "password": "weak",
+  "nombre": "Test",
+  "apellido": "User"
+}
+
+###
+
+### 5. Login sin Verificación (debe fallar - REQ-001)
+POST {{host}}/api/auth/login/password
+Content-Type: {{contentType}}
+
+{
+  "email": "test@example.com",
+  "password": "SecureP@ss123"
+}
+
+###
+
+### 6. Verificar Headers de Seguridad (REQ-005)
+GET {{host}}/api/auth/health
+Accept: {{contentType}}
+
+# Verifica en la respuesta:
+# - Content-Security-Policy
+# - Strict-Transport-Security
+# - X-Frame-Options
+# - X-Content-Type-Options
+# - X-XSS-Protection
+# - Referrer-Policy
+# - Permissions-Policy
 
 ###

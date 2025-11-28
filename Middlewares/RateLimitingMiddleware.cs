@@ -31,8 +31,7 @@ public class RateLimitingMiddleware
         CleanupExpiredAttempts();
 
         // Verificar límites según el endpoint
-        if (path?.Contains("/api/auth/login") == true || 
-            path?.Contains("/api/auth/login/password") == true)
+        if (path?.Contains("/api/auth/login/password") == true)
         {
             if (IsLoginBlocked(ipAddress))
             {
@@ -62,11 +61,11 @@ public class RateLimitingMiddleware
         await _next(context);
 
         // Registrar intento fallido después de la respuesta
-        if (context.Response.StatusCode == 401 && path?.Contains("/login") == true)
+        if (context.Response.StatusCode == 401 && path?.Contains("/login/password") == true)
         {
             RecordFailedLogin(ipAddress);
         }
-        else if (context.Response.StatusCode == 200 && path?.Contains("/login") == true)
+        else if (context.Response.StatusCode == 200 && path?.Contains("/login/password") == true)
         {
             ClearLoginAttempts(ipAddress);
         }

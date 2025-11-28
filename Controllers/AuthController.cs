@@ -137,27 +137,6 @@ public class AuthController : ControllerBase
     #region Login con Password
 
     /// <summary>
-    /// Login tradicional con email y contraseña (legacy)
-    /// </summary>
-    [HttpPost("login")]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request)
-    {
-        try
-        {
-            var tokenResponse = await _authService.LoginAsync(request);
-            return Ok(tokenResponse);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Unauthorized(new { message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
-        }
-    }
-
-    /// <summary>
     /// Login con email y contraseña (nuevo endpoint específico)
     /// </summary>
     [HttpPost("login/password")]

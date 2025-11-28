@@ -17,7 +17,6 @@ public interface IAuthService
     Task<bool> VerifyGenericTokenAsync(VerifyGenericTokenRequest request);
 
     // Login con Password
-    Task<TokenResponse> LoginAsync(LoginRequest request);
     Task<TokenResponse> LoginWithPasswordAsync(LoginPasswordRequest request);
 
     // Login con OTP

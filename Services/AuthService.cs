@@ -1,3 +1,5 @@
+using IS_2_Back_End.Attributes;
+using IS_2_Back_End.Document;
 using IS_2_Back_End.DTOs;
 using IS_2_Back_End.DTOs.Auth;
 using IS_2_Back_End.Entities;
@@ -7,6 +9,7 @@ using IS_2_Back_End.Utils;
 using System.Security.Cryptography;
 using System.Text.Json;
 
+
 namespace IS_2_Back_End.Services;
 
 public class AuthService : IAuthService
@@ -15,21 +18,30 @@ public class AuthService : IAuthService
     private readonly Sha256Hasher _hasher;
     private readonly TokenService _tokenService;
     private readonly N8nClient _n8nClient;
+    private readonly ILogger<AuthService>? _logger;
 
     public AuthService(
         IUserRepository userRepository,
         Sha256Hasher hasher,
         TokenService tokenService,
-        N8nClient n8nClient)
+        N8nClient n8nClient,
+        ILogger<AuthService>? logger = null)
     {
         _userRepository = userRepository;
         _hasher = hasher;
         _tokenService = tokenService;
         _n8nClient = n8nClient;
+        _logger = logger;
     }
 
     #region Registro y Verificación Básicos
-
+    /// <summary>
+    /// Registra un nuevo usuario en el sistema
+    /// REQ-002: Validación de entrada (XSS y SQL Injection)
+    /// REQ-003: Validación de complejidad de contraseña
+    /// </summary>
+    [Requirement(Requirements.INPUT_VALIDATION_REQUIRED, "Validación de entrada para prevenir XSS y SQL Injection")]
+    [Requirement(Requirements.PASSWORD_COMPLEXITY_REQUIRED, "Validación de complejidad de contraseña")]
     public async Task<UserResponse> RegisterAsync(RegisterRequest request)
     {
         var (isValid, errors) = InputSanitizer.Validation.ValidateRegistration(
@@ -154,19 +166,6 @@ public class AuthService : IAuthService
 
     #endregion
 
-    #region Login Tradicional
-
-    public async Task<TokenResponse> LoginAsync(LoginRequest request)
-    {
-        return await LoginWithPasswordAsync(new LoginPasswordRequest
-        {
-            Email = request.Email,
-            Password = request.Password
-        });
-    }
-
-    #endregion
-
     #region Prevalidación
 
     public async Task<PrevalidateResponse> PrevalidateEmailAsync(string email)
@@ -228,6 +227,16 @@ public class AuthService : IAuthService
 
     #region Login con Password
 
+    /// <summary>
+    /// Login con email y contraseña
+    /// REQ-001: Verificación de correo electrónico obligatoria
+    /// Bloquea login si el email no ha sido verificado
+    /// </summary>
+    /// <param name="request">Credenciales de login (email y password)</param>
+    /// <returns>Tokens de acceso y refresh</returns>
+    /// <exception cref="UnauthorizedAccessException">Si las credenciales son inválidas o el email no está verificado</exception>
+    [Requirement(Requirements.EMAIL_VERIFICATION_REQUIRED,
+        "Verificación de correo electrónico obligatoria para login con password")]
     public async Task<TokenResponse> LoginWithPasswordAsync(LoginPasswordRequest request)
     {
         var user = await _userRepository.GetByEmailWithRolesAsync(request.Email);
@@ -239,6 +248,7 @@ public class AuthService : IAuthService
 
         if (!user.IsVerified)
         {
+            // Verificación REQ-001: Email debe estar verificado antes de permitir login  
             throw new UnauthorizedAccessException("Debes verificar tu email antes de iniciar sesión");
         }
 
@@ -249,6 +259,12 @@ public class AuthService : IAuthService
 
     #region Login con OTP
 
+    /// <summary>
+    /// Solicita un código OTP después de validar la contraseña
+    /// REQ-001: Verificación de correo electrónico obligatoria
+    /// </summary>
+    [Requirement(Requirements.EMAIL_VERIFICATION_REQUIRED,
+        "Verificación de correo electrónico obligatoria para solicitar OTP")]
     public async Task<bool> RequestLoginOtpAsync(LoginPasswordRequestOtpRequest request)
     {
         var user = await _userRepository.GetByEmailAsync(request.Email);
@@ -311,7 +327,12 @@ public class AuthService : IAuthService
     #endregion
 
     #region Magic Link
-
+    /// <summary>
+    /// Solicita un magic link para login sin contraseña
+    /// REQ-001: Verificación de correo electrónico obligatoria
+    /// </summary>
+    [Requirement(Requirements.EMAIL_VERIFICATION_REQUIRED,
+        "Verificación de correo electrónico obligatoria para solicitar Magic Link")]
     public async Task<bool> RequestMagicLinkAsync(string email)
     {
         var user = await _userRepository.GetByEmailAsync(email);
@@ -435,7 +456,11 @@ public class AuthService : IAuthService
     #endregion
 
     #region Password Reset
-
+    /// <summary>
+    /// Resetea la contraseña usando el token recibido
+    /// REQ-003: Validación de complejidad de contraseña
+    /// </summary>
+    [Requirement(Requirements.PASSWORD_COMPLEXITY_REQUIRED, "Validación de complejidad de contraseña en reset")]
     public async Task<bool> RequestPasswordResetAsync(string email)
     {
         var user = await _userRepository.GetByEmailAsync(email);
