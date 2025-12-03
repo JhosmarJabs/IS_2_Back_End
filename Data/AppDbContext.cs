@@ -1,4 +1,4 @@
-﻿ using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using IS_2_Back_End.Entities;
 
 namespace IS_2_Back_End.Data;
@@ -40,7 +40,6 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.Phone).IsUnique();
         });
 
-        // Configuración Role
         modelBuilder.Entity<Role>(entity =>
         {
             entity.ToTable("roles");
@@ -48,8 +47,13 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Name).HasColumnName("name").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");
-
             entity.HasIndex(e => e.Name).IsUnique();
+
+            // Datos semilla  
+            entity.HasData(
+                new Role { Id = 1, Name = "user", CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+                new Role { Id = 2, Name = "admin", CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+            );
         });
 
         // Configuración UserRole (Tabla intermedia)
@@ -57,7 +61,7 @@ public class AppDbContext : DbContext
         {
             entity.ToTable("user_roles");
             entity.HasKey(ur => new { ur.UserId, ur.RoleId });
-            
+
             entity.Property(e => e.UserId).HasColumnName("user_id");
             entity.Property(e => e.RoleId).HasColumnName("role_id");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");

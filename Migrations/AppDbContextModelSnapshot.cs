@@ -89,6 +89,20 @@ namespace IS_2_Back_End.Migrations
                         .IsUnique();
 
                     b.ToTable("roles", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "user"
+                        },
+                        new
+                        {
+                            Id = 2,
+                            CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "admin"
+                        });
                 });
 
             modelBuilder.Entity("IS_2_Back_End.Entities.User", b =>

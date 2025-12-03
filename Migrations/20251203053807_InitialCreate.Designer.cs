@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace IS_2_Back_End.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20251107051545_Baseline")]
-    partial class Baseline
+    [Migration("20251203053807_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -92,6 +92,20 @@ namespace IS_2_Back_End.Migrations
                         .IsUnique();
 
                     b.ToTable("roles", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "user"
+                        },
+                        new
+                        {
+                            Id = 2,
+                            CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "admin"
+                        });
                 });
 
             modelBuilder.Entity("IS_2_Back_End.Entities.User", b =>

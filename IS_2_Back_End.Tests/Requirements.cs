@@ -262,3 +262,4 @@ public class REQ004_PasswordHashingTests
         Assert.False(isValid);
     }
 }
+
