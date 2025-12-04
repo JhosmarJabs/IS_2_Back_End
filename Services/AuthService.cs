@@ -578,7 +578,15 @@ public class AuthService : IAuthService
         user.UpdatedAt = DateTime.UtcNow;
         await _userRepository.UpdateAsync(user);
 
-        var accessToken = _tokenService.GenerateAccessToken(user);
+        // Crear diccionario con claims adicionales  
+        var additionalClaims = new Dictionary<string, object>
+        {
+            { "nombre", user.Nombre },
+            { "apellido", user.Apellido },
+            { "name", $"{user.Nombre} {user.Apellido}" }
+        };
+
+        var accessToken = _tokenService.GenerateAccessToken(user, additionalClaims);
         var refreshToken = _tokenService.GenerateRefreshToken();
         var refreshTokenHash = HashToken(refreshToken);
 

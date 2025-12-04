@@ -17,31 +17,39 @@ public class TokenService
         _jwtSettings = jwtSettings;
     }
 
-    public string GenerateAccessToken(User user)
+    public string GenerateAccessToken(User user, Dictionary<string, object> additionalClaims = null)
     {
         var claims = new List<Claim>
-        {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Email, user.Email),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-        };
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+        new Claim(JwtRegisteredClaimNames.Email, user.Email),
+        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+        new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+    };
 
-        // Agregar roles como claims
-        foreach (var userRole in user.UserRoles)
+        // Agregar roles  
+        foreach (var role in user.UserRoles.Select(ur => ur.Role.Name))
         {
-            claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
+            claims.Add(new Claim("role", role));
+        }
+
+        // Agregar claims adicionales si existen  
+        if (additionalClaims != null)
+        {
+            foreach (var claim in additionalClaims)
+            {
+                claims.Add(new Claim(claim.Key, claim.Value?.ToString() ?? ""));
+            }
         }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Secret));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
         var token = new JwtSecurityToken(
             issuer: _jwtSettings.Issuer,
             audience: _jwtSettings.Audience,
             claims: claims,
             expires: DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpirationMinutes),
-            signingCredentials: credentials
-        );
+            signingCredentials: credentials);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
